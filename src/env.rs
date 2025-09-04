@@ -1,4 +1,5 @@
 use std::env;
+use std::path::Path;
 
 const COLORTERM: &str = "COLORTERM";
 const BAT_THEME: &str = "BAT_THEME";
@@ -40,11 +41,11 @@ impl DeltaEnv {
         let current_dir = env::current_dir().ok();
         let pagers = (
             env::var(DELTA_PAGER).ok(),
-            // We're using `bat::config::get_pager_executable` here instead of just returning
-            // the pager from the environment variables, because we want to make sure
-            // that the pager is a valid pager from env and handle the case of
-            // the PAGER being set to something invalid like "most" and "more".
-            bat::config::get_pager_executable(None),
+            // Reimplement bat's pager detection logic to preserve full PAGER commands.
+            // This fixes the bug where bat::config::get_pager_executable(None) was stripping
+            // arguments from complex PAGER commands like '/bin/sh -c "head -10000 | cat"'.
+            // We can't use bat::pager::get_pager directly because the pager module is private.
+            get_pager_from_env(),
         );
 
         Self {
@@ -83,6 +84,7 @@ pub mod tests {
         let feature = "Awesome Feature";
         env::set_var("DELTA_FEATURES", feature);
         let env = DeltaEnv::init();
+        drop(_guard);
         assert_eq!(env.features, Some(feature.into()));
         // otherwise `current_dir` is not used in the test cfg:
         assert_eq!(env.current_dir, env::current_dir().ok());
@@ -93,6 +95,7 @@ pub mod tests {
         let _guard = ENV_ACCESS.lock().unwrap();
         env::set_var("PAGER", "bat");
         let env = DeltaEnv::init();
+        drop(_guard);
         assert_eq!(
             env.pagers.1,
             Some("bat".into()),
@@ -106,6 +109,7 @@ pub mod tests {
         let _guard = ENV_ACCESS.lock().unwrap();
         env::set_var("PAGER", "more");
         let env = DeltaEnv::init();
+        drop(_guard);
         assert_eq!(env.pagers.1, Some("less".into()));
     }
 
@@ -114,6 +118,123 @@ pub mod tests {
         let _guard = ENV_ACCESS.lock().unwrap();
         env::set_var("PAGER", "most");
         let env = DeltaEnv::init();
+        drop(_guard);
         assert_eq!(env.pagers.1, Some("less".into()));
+    }
+
+    #[test]
+    fn test_env_parsing_with_complex_shell_pager_command() {
+        // This test verifies the core bug fix: complex PAGER commands with arguments
+        // should be preserved, not stripped down to just the executable path.
+        let _guard = ENV_ACCESS.lock().unwrap();
+        env::set_var("PAGER", "/bin/sh -c \"head -10000 | cat\"");
+        let env = DeltaEnv::init();
+        drop(_guard);
+        assert_eq!(
+            env.pagers.1,
+            Some("/bin/sh -c head -10000 | cat".into()),
+            "Complex shell pager command should be preserved with arguments"
+        );
+    }
+
+    #[test]
+    fn test_env_parsing_with_simple_shell_pager_command() {
+        let _guard = ENV_ACCESS.lock().unwrap();
+        env::set_var("PAGER", "/bin/sh -c \"cat\"");
+        let env = DeltaEnv::init();
+        drop(_guard);
+        assert_eq!(
+            env.pagers.1,
+            Some("/bin/sh -c cat".into()),
+            "Simple shell pager command should be preserved with arguments"
+        );
+    }
+
+    #[test]
+    fn test_env_parsing_with_pager_arguments_preserved() {
+        // Test that pager commands with various argument styles are preserved
+        let _guard = ENV_ACCESS.lock().unwrap();
+        env::set_var("PAGER", "less -R -F -X");
+        let env = DeltaEnv::init();
+        drop(_guard);
+        assert_eq!(
+            env.pagers.1,
+            Some("less -R -F -X".into()),
+            "Pager arguments should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_env_parsing_delta_pager_takes_precedence() {
+        // Test that DELTA_PAGER takes precedence over PAGER
+        let _guard = ENV_ACCESS.lock().unwrap();
+        env::set_var("PAGER", "cat");
+        env::set_var("DELTA_PAGER", "/bin/sh -c \"head -1 | cat\"");
+        let env = DeltaEnv::init();
+        drop(_guard);
+        assert_eq!(
+            env.pagers.0,
+            Some("/bin/sh -c \"head -1 | cat\"".into()),
+            "DELTA_PAGER should be preserved exactly as set"
+        );
+        assert_eq!(
+            env.pagers.1,
+            Some("cat".into()),
+            "PAGER should also be preserved for fallback"
+        );
+    }
+}
+
+/// Get pager from environment variables using bat's logic.
+/// This reimplements bat's pager::get_pager function to preserve full PAGER commands
+/// including arguments, while still handling problematic pagers properly.
+fn get_pager_from_env() -> Option<String> {
+    let bat_pager = env::var("BAT_PAGER");
+    let pager = env::var("PAGER");
+
+    let (cmd, from_pager_env) = match (&bat_pager, &pager) {
+        (Ok(bat_pager), _) => (bat_pager.as_str(), false),
+        (_, Ok(pager)) => (pager.as_str(), true),
+        _ => ("less", false),
+    };
+
+    // Parse the command using shell_words to split into binary and arguments
+    if let Ok(parts) = shell_words::split(cmd) {
+        if let Some((bin, args)) = parts.split_first() {
+            // Determine what kind of pager this is
+            let pager_bin = Path::new(bin).file_stem();
+            let current_bin = env::args_os().next();
+
+            let is_current_bin_pager = current_bin
+                .map(|s| Path::new(&s).file_stem() == pager_bin)
+                .unwrap_or(false);
+
+            let is_problematic_pager = if from_pager_env {
+                // Only replace problematic pagers when they come from PAGER env var
+                match pager_bin.map(|s| s.to_string_lossy()).as_deref() {
+                    Some("more") | Some("most") => true,
+                    _ if is_current_bin_pager => true, // Prevent recursion
+                    _ => false,
+                }
+            } else {
+                false
+            };
+
+            if is_problematic_pager {
+                // Replace problematic pagers with "less"
+                Some("less".to_string())
+            } else {
+                // Preserve the full command including arguments
+                if args.is_empty() {
+                    Some(bin.to_string())
+                } else {
+                    Some(format!("{} {}", bin, args.join(" ")))
+                }
+            }
+        } else {
+            Some("less".to_string())
+        }
+    } else {
+        Some("less".to_string())
     }
 }
