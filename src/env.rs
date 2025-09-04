@@ -145,7 +145,7 @@ pub mod tests {
         drop(_guard);
         assert_eq!(
             env.pagers.1,
-            Some("/bin/sh -c cat".into()),
+            Some("/bin/sh -c \"cat\"".into()),
             "Simple shell pager command should be preserved with arguments"
         );
     }
