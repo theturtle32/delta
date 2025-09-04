@@ -224,12 +224,8 @@ fn get_pager_from_env() -> Option<String> {
                 // Replace problematic pagers with "less"
                 Some("less".to_string())
             } else {
-                // Preserve the full command including arguments
-                if args.is_empty() {
-                    Some(bin.to_string())
-                } else {
-                    Some(format!("{} {}", bin, args.join(" ")))
-                }
+                // Preserve the original command string unmodified to maintain proper quoting
+                Some(cmd.to_string())
             }
         } else {
             Some("less".to_string())
