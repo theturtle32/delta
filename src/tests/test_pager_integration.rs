@@ -11,20 +11,22 @@ fn test_pager_integration_with_complex_command() {
     // cause "command not found" errors because bat::config::get_pager_executable
     // strips the arguments, leaving only the executable path.
 
-    // Acquire the environment access lock to prevent race conditions with other tests
-    let _lock = crate::env::tests::ENV_ACCESS.lock().unwrap();
+    let mut delta_cmd = {
+        // Acquire the environment access lock to prevent race conditions with other tests
+        let _lock = crate::env::tests::ENV_ACCESS.lock().unwrap();
 
-    // Use RAII guard to ensure environment variable is properly restored even if test panics
-    let _env_guard = EnvVarGuard::new("PAGER", "/bin/sh -c \"head -10000 | cat\"");
+        // Use RAII guard to ensure environment variable is properly restored even if test panics
+        let _env_guard = EnvVarGuard::new("PAGER", "/bin/sh -c \"head -10000 | cat\"");
 
-    // Run delta as a subprocess with paging enabled - this will spawn the actual pager
-    let mut delta_cmd = Command::new("cargo")
-        .args(&["run", "--bin", "delta", "--", "--paging=always"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("delta to start successfully");
+        // Run delta as a subprocess with paging enabled - this will spawn the actual pager
+        Command::new("cargo")
+            .args(&["run", "--bin", "delta", "--", "--paging=always"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("delta to start successfully")
+    };
 
     // Send test input to delta
     if let Some(stdin) = delta_cmd.stdin.as_mut() {
