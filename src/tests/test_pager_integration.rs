@@ -1,8 +1,9 @@
 #![cfg(test)]
 
-use std::env;
 use std::io::Write;
 use std::process::{Command, Stdio};
+
+use crate::tests::integration_test_utils::EnvVarGuard;
 
 #[test]
 fn test_pager_integration_with_complex_command() {
@@ -10,7 +11,11 @@ fn test_pager_integration_with_complex_command() {
     // cause "command not found" errors because bat::config::get_pager_executable
     // strips the arguments, leaving only the executable path.
 
-    env::set_var("PAGER", "/bin/sh -c \"head -10000 | cat\"");
+    // Acquire the environment access lock to prevent race conditions with other tests
+    let _lock = crate::env::tests::ENV_ACCESS.lock().unwrap();
+
+    // Use RAII guard to ensure environment variable is properly restored even if test panics
+    let _env_guard = EnvVarGuard::new("PAGER", "/bin/sh -c \"head -10000 | cat\"");
 
     // Run delta as a subprocess with paging enabled - this will spawn the actual pager
     let mut delta_cmd = Command::new("cargo")
@@ -32,9 +37,6 @@ fn test_pager_integration_with_complex_command() {
     let output = delta_cmd
         .wait_with_output()
         .expect("delta to finish and produce output");
-
-    // Clean up environment variable
-    env::remove_var("PAGER");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
