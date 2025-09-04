@@ -200,38 +200,33 @@ fn get_pager_from_env() -> Option<String> {
     };
 
     // Parse the command using shell_words to split into binary and arguments
-    if let Ok(parts) = shell_words::split(cmd) {
-        if let Some((bin, _)) = parts.split_first() {
-            // Determine what kind of pager this is
-            let pager_bin = Path::new(bin).file_stem();
-            let current_bin = env::args_os().next();
+    let parts = match shell_words::split(cmd) {
+        Ok(parts) if !parts.is_empty() => parts,
+        // Fallback for malformed or empty commands
+        _ => return Some("less".to_string()),
+    };
 
-            let is_current_bin_pager = current_bin
-                .map(|s| Path::new(&s).file_stem() == pager_bin)
-                .unwrap_or(false);
+    let bin = &parts[0];
+    // Determine what kind of pager this is
+    let pager_bin = Path::new(bin).file_stem();
+    let current_bin = env::args_os().next();
 
-            let is_problematic_pager = if from_pager_env {
-                // Only replace problematic pagers when they come from PAGER env var
-                match pager_bin.map(|s| s.to_string_lossy()).as_deref() {
-                    Some("more") | Some("most") => true,
-                    _ if is_current_bin_pager => true, // Prevent recursion
-                    _ => false,
-                }
-            } else {
-                false
-            };
+    let is_current_bin_pager = current_bin
+        .map(|s| Path::new(&s).file_stem() == pager_bin)
+        .unwrap_or(false);
 
-            if is_problematic_pager {
-                // Replace problematic pagers with "less"
-                Some("less".to_string())
-            } else {
-                // Preserve the original command string unmodified to maintain proper quoting
-                Some(cmd.to_string())
-            }
-        } else {
-            Some("less".to_string())
-        }
-    } else {
+    // Only replace problematic pagers when they come from PAGER env var
+    let is_problematic_pager = from_pager_env
+        && (matches!(
+            pager_bin.map(|s| s.to_string_lossy()).as_deref(),
+            Some("more") | Some("most")
+        ) || is_current_bin_pager);
+
+    if is_problematic_pager {
+        // Replace problematic pagers with "less"
         Some("less".to_string())
+    } else {
+        // Preserve the original command string unmodified to maintain proper quoting
+        Some(cmd.to_string())
     }
 }

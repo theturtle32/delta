@@ -18,9 +18,8 @@ fn test_pager_integration_with_complex_command() {
     let _env_guard = EnvVarGuard::new("PAGER", "/bin/sh -c \"head -10000 | cat\"");
 
     // Run delta as a subprocess with paging enabled - this will spawn the actual pager
-    let delta_path = env!("CARGO_BIN_EXE_delta");
-    let mut delta_cmd = Command::new(delta_path)
-        .args(&["--paging=always"])
+    let mut delta_cmd = Command::new("cargo")
+        .args(&["run", "--bin", "delta", "--", "--paging=always"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
