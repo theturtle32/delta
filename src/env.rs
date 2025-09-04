@@ -132,7 +132,7 @@ pub mod tests {
         drop(_guard);
         assert_eq!(
             env.pagers.1,
-            Some("/bin/sh -c head -10000 | cat".into()),
+            Some("/bin/sh -c \"head -10000 | cat\"".into()),
             "Complex shell pager command should be preserved with arguments"
         );
     }
